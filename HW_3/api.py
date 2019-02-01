@@ -36,44 +36,89 @@ GENDERS = {
 }
 
 
-class CharField(object):
+class NullableValidator:
     pass
 
 
-class ArgumentsField(object):
+class RequiredValidator:
     pass
 
 
-class EmailField(CharField):
-    pass
+class BaseField:
+
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self, nullable=False, required=False):
+        self.nullable = nullable
+        self.required = required
+        self._validators = ()
+
+    @abc.abstractmethod
+    def is_valid(self):
+        return False
 
 
-class PhoneField(object):
-    pass
+class CharField(BaseField):
+
+    def __init__(self, *args, **kwargs):
+        super(CharField, self).__init__(*args, **kwargs)
+        self._validators.append()
 
 
-class DateField(object):
-    pass
+class ArgumentsField(BaseField):
+    def __init__(self, **kwargs):
+        pass
 
 
-class BirthDayField(object):
-    pass
+class EmailField(BaseField):
+    def __init__(self, **kwargs):
+        super(EmailField, self).__init__(**kwargs)
+        pass
 
 
-class GenderField(object):
-    pass
+class PhoneField(BaseField):
+    def __init__(self, **kwargs):
+        pass
 
 
-class ClientIDsField(object):
-    pass
+class DateField(BaseField):
+    def __init__(self, **kwargs):
+        pass
 
 
-class ClientsInterestsRequest(object):
+class BirthDayField(BaseField):
+    def __init__(self, **kwargs):
+        pass
+
+
+class GenderField(BaseField):
+    def __init__(self, **kwargs):
+        pass
+
+
+class ClientIDsField(BaseField):
+    def __init__(self, **kwargs):
+        pass
+
+
+class BaseRequest:
+
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self):
+        pass
+
+    @abc.abstractmethod
+    def validate(self):
+        pass
+
+
+class ClientsInterestsRequest(BaseRequest):
     client_ids = ClientIDsField(required=True)
     date = DateField(required=False, nullable=True)
 
 
-class OnlineScoreRequest(object):
+class OnlineScoreRequest(BaseRequest):
     first_name = CharField(required=False, nullable=True)
     last_name = CharField(required=False, nullable=True)
     email = EmailField(required=False, nullable=True)
@@ -82,7 +127,7 @@ class OnlineScoreRequest(object):
     gender = GenderField(required=False, nullable=True)
 
 
-class MethodRequest(object):
+class MethodRequest(BaseRequest):
     account = CharField(required=False, nullable=True)
     login = CharField(required=True, nullable=True)
     token = CharField(required=True, nullable=True)
