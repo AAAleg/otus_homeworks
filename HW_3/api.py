@@ -1,14 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-import abc
 import json
 import datetime
 import logging
 import hashlib
 import uuid
 from optparse import OptionParser
-from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from scoring import get_score, get_interests
 
 SALT = "Otus"
 ADMIN_LOGIN = "admin"
@@ -36,81 +33,175 @@ GENDERS = {
 }
 
 
-class NullableValidator:
-    pass
-
-
-class RequiredValidator:
-    pass
-
-
 class BaseField:
 
-    __metaclass__ = abc.ABCMeta
+    empty_values = (None, '', [], (), {})
 
     def __init__(self, nullable=False, required=False):
         self.nullable = nullable
         self.required = required
-        self._validators = ()
 
-    @abc.abstractmethod
-    def is_valid(self):
-        return False
+    def validate(self, value):
+        if value is None and self.required:
+            raise ValueError("Это поле является обязательным")
+        if value in self.empty_values and not self.nullable:
+            raise ValueError("Это поле не может быть пустым")
+
+    def run_validator(self, value):
+        pass
+
+    def to_python(self, value):
+        return value
+
+    def clean(self, value):
+        value = self.to_python(value)
+        self.validate(value)
+        if value in self.empty_values:
+            return value
+        self.run_validator(value)
+
+        return value
 
 
 class CharField(BaseField):
 
-    def __init__(self, *args, **kwargs):
-        super(CharField, self).__init__(*args, **kwargs)
-        self._validators.append()
+    def to_python(self, value):
+        if value is not None and not isinstance(value, str):
+            raise TypeError("Это поле должно быть строкой")
+        return value
 
 
 class ArgumentsField(BaseField):
-    def __init__(self, **kwargs):
-        pass
+
+    def to_python(self, value):
+        if value is not None and not isinstance(value, dict):
+            raise TypeError("Это поле должно быть словарем")
+        return value
 
 
-class EmailField(BaseField):
-    def __init__(self, **kwargs):
-        super(EmailField, self).__init__(**kwargs)
-        pass
+class EmailField(CharField):
+
+    def run_validator(self, value):
+        super().run_validator(value)
+        if "@" not in value:
+            raise ValueError("Неверно указан адрес электронной почты")
 
 
 class PhoneField(BaseField):
-    def __init__(self, **kwargs):
-        pass
+
+    def to_python(self, value):
+        if value is None:
+            return value
+        if not isinstance(value, (str, int)):
+            raise TypeError("Это поле должно быть задано числом или строкой")
+        return str(value)
+
+    def run_validator(self, value):
+        try:
+            int(value)
+        except ValueError:
+            raise ValueError("Это поле должно содержать только цифры")
+
+        if not value.startswith("7") or len(value) != 11:
+            raise ValueError("Неверно указан номер телефона")
 
 
-class DateField(BaseField):
-    def __init__(self, **kwargs):
-        pass
+class DateField(CharField):
+
+    def to_python(self, value):
+        value = super().to_python(value)
+        if value in self.empty_values:
+            return value
+        try:
+            return self.strptime(value, "%d.%m.%Y")
+        except ValueError:
+            raise ValueError("Дата должна иметь формат DD.MM.YYYY")
+
+    def strptime(self, value, format):
+        return datetime.datetime.strptime(value, format).date()
 
 
-class BirthDayField(BaseField):
-    def __init__(self, **kwargs):
-        pass
+class BirthDayField(DateField):
+
+    def run_validator(self, value):
+        super().run_validator(value)
+        today = datetime.date.today()
+        delta = today - value
+        if delta.days / 365.25 > 70:
+            raise ValueError("С даты рождения должно пройти не более 70 лет")
 
 
 class GenderField(BaseField):
-    def __init__(self, **kwargs):
-        pass
+
+    def to_python(self, value):
+        if value is not None and not isinstance(value, int):
+            raise TypeError("Это поле должно быть целым положительным числом")
+        return value
+
+    def run_validator(self, value):
+        if value not in GENDERS:
+            raise ValueError("Пол должен быть задан значениями 0,1 или 2")
 
 
 class ClientIDsField(BaseField):
-    def __init__(self, **kwargs):
-        pass
+
+    def to_python(self, value):
+        if value is not None:
+            if not isinstance(value, list) or not all(isinstance(v, int) for v in value):
+                raise TypeError("Это поле должно содержать спискок целых чисел")
+        return value
+
+    def run_validator(self, value):
+        if not all(v >= 0 for v in value):
+            raise ValueError("Это поле должно состоять из положительных целых чисел")
 
 
-class BaseRequest:
+class RequestMeta(type):
 
-    __metaclass__ = abc.ABCMeta
+    def __new__(mcs, name, bases, namespace):
+        fields = {
+            field_name: field
+            for field_name, field in namespace.items()
+            if isinstance(field, BaseField)
+        }
 
-    def __init__(self):
-        pass
+        new_namespace = namespace.copy()
+        for field_name in fields:
+            del new_namespace[field_name]
+        new_namespace["_fields"] = fields
+        return super().__new__(mcs, name, bases, new_namespace)
 
-    @abc.abstractmethod
+
+class BaseRequest(metaclass=RequestMeta):
+
+    def __init__(self, data=None):
+        self._errors = None
+        self.data = {} if not data else data
+        self.non_empty_fields = []
+
+    @property
+    def errors(self):
+        if self._errors is None:
+            self.validate()
+
+        return self._errors
+
+    def is_valid(self):
+        return not self.errors
+
     def validate(self):
-        pass
+        self._errors = {}
+
+        for name, field in self._fields.items():
+            try:
+                value = self.data.get(name)
+                value = field.clean(value)
+                setattr(self, name, value)
+
+                if value not in field.empty_values:
+                    self.non_empty_fields.append(name)
+            except (TypeError, ValueError) as e:
+                self._errors[name] = str(e)
 
 
 class ClientsInterestsRequest(BaseRequest):
@@ -126,6 +217,17 @@ class OnlineScoreRequest(BaseRequest):
     birthday = BirthDayField(required=False, nullable=True)
     gender = GenderField(required=False, nullable=True)
 
+    def validate(self):
+        super().validate()
+        if not self._errors:
+            if self.phone and self.email:
+                return
+            if self.first_name and self.last_name:
+                return
+            if self.gender is not None and self.birthday:
+                return
+            self._errors["arguments"] = "Неверный список аргументов"
+
 
 class MethodRequest(BaseRequest):
     account = CharField(required=False, nullable=True)
@@ -139,19 +241,57 @@ class MethodRequest(BaseRequest):
         return self.login == ADMIN_LOGIN
 
 
+class OnlineScoreHandler:
+
+    def process_request(self, request, context, store):
+        r = OnlineScoreRequest(request.arguments)
+        if not r.is_valid():
+            return r.errors, INVALID_REQUEST
+
+        if request.is_admin:
+            score = 42
+        else:
+            score = get_score(store, r.phone, r.email, r.birthday, r.gender, r.first_name, r.last_name)
+        context["has"] = r.non_empty_fields
+        return {"score": score}, OK
+
+
+class ClientsInterestsHandler:
+
+    def process_request(self, request, context, store):
+        r = ClientsInterestsRequest(request.arguments)
+        if not r.is_valid():
+            return r.errors, INVALID_REQUEST
+
+        context["nclients"] = len(r.client_ids)
+        response_body = {cid: get_interests(store, cid) for cid in r.client_ids}
+        return response_body, OK
+
+
 def check_auth(request):
     if request.is_admin:
-        digest = hashlib.sha512(datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT).hexdigest()
+        digest = hashlib.sha512(bytes(datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT, "utf-8")).hexdigest()
     else:
-        digest = hashlib.sha512(request.account + request.login + SALT).hexdigest()
+        digest = hashlib.sha512(bytes(request.account + request.login + SALT, "utf-8")).hexdigest()
     if digest == request.token:
         return True
     return False
 
 
 def method_handler(request, ctx, store):
-    response, code = None, None
-    return response, code
+    handlers = {
+        "online_score": OnlineScoreHandler,
+        "clients_interests": ClientsInterestsHandler
+    }
+
+    method_request = MethodRequest(request["body"])
+    if not method_request.is_valid():
+        return method_request.errors, INVALID_REQUEST
+    if not check_auth(method_request):
+        return "Forbidden", FORBIDDEN
+
+    handler = handlers[method_request.method]()
+    return handler.process_request(method_request, ctx, store)
 
 
 class MainHTTPHandler(BaseHTTPRequestHandler):
@@ -179,7 +319,7 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
             if path in self.router:
                 try:
                     response, code = self.router[path]({"body": request, "headers": self.headers}, context, self.store)
-                except Exception, e:
+                except Exception as e:
                     logging.exception("Unexpected error: %s" % e)
                     code = INTERNAL_ERROR
             else:
@@ -194,7 +334,7 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
             r = {"error": response or ERRORS.get(code, "Unknown Error"), "code": code}
         context.update(r)
         logging.info(context)
-        self.wfile.write(json.dumps(r))
+        self.wfile.write(bytes(json.dumps(r), "utf-8"))
         return
 
 
