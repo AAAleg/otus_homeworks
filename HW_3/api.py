@@ -26,16 +26,12 @@ ERRORS = {
 UNKNOWN = 0
 MALE = 1
 FEMALE = 2
-GENDERS = {
-    UNKNOWN: "unknown",
-    MALE: "male",
-    FEMALE: "female",
-}
+GENDERS = {UNKNOWN: "unknown", MALE: "male", FEMALE: "female"}
 
 
 class BaseField:
 
-    empty_values = (None, '', [], (), {})
+    empty_values = (None, "", [], (), {})
 
     def __init__(self, nullable=False, required=False):
         self.nullable = nullable
@@ -64,7 +60,6 @@ class BaseField:
 
 
 class CharField(BaseField):
-
     def to_python(self, value):
         if value is not None and not isinstance(value, str):
             raise TypeError("Это поле должно быть строкой")
@@ -72,7 +67,6 @@ class CharField(BaseField):
 
 
 class ArgumentsField(BaseField):
-
     def to_python(self, value):
         if value is not None and not isinstance(value, dict):
             raise TypeError("Это поле должно быть словарем")
@@ -80,7 +74,6 @@ class ArgumentsField(BaseField):
 
 
 class EmailField(CharField):
-
     def run_validator(self, value):
         super().run_validator(value)
         if "@" not in value:
@@ -88,7 +81,6 @@ class EmailField(CharField):
 
 
 class PhoneField(BaseField):
-
     def to_python(self, value):
         if value is None:
             return value
@@ -107,7 +99,6 @@ class PhoneField(BaseField):
 
 
 class DateField(CharField):
-
     def to_python(self, value):
         value = super().to_python(value)
         if value in self.empty_values:
@@ -122,7 +113,6 @@ class DateField(CharField):
 
 
 class BirthDayField(DateField):
-
     def run_validator(self, value):
         super().run_validator(value)
         today = datetime.date.today()
@@ -132,7 +122,6 @@ class BirthDayField(DateField):
 
 
 class GenderField(BaseField):
-
     def to_python(self, value):
         if value is not None and not isinstance(value, int):
             raise TypeError("Это поле должно быть целым положительным числом")
@@ -144,10 +133,11 @@ class GenderField(BaseField):
 
 
 class ClientIDsField(BaseField):
-
     def to_python(self, value):
         if value is not None:
-            if not isinstance(value, list) or not all(isinstance(v, int) for v in value):
+            if not isinstance(value, list) or not all(
+                isinstance(v, int) for v in value
+            ):
                 raise TypeError("Это поле должно содержать спискок целых чисел")
         return value
 
@@ -157,7 +147,6 @@ class ClientIDsField(BaseField):
 
 
 class RequestMeta(type):
-
     def __new__(mcs, name, bases, namespace):
         fields = {
             field_name: field
@@ -173,7 +162,6 @@ class RequestMeta(type):
 
 
 class BaseRequest(metaclass=RequestMeta):
-
     def __init__(self, data=None):
         self._errors = None
         self.data = {} if not data else data
@@ -242,7 +230,6 @@ class MethodRequest(BaseRequest):
 
 
 class OnlineScoreHandler:
-
     def process_request(self, request, context, store):
         r = OnlineScoreRequest(request.arguments)
         if not r.is_valid():
@@ -251,13 +238,14 @@ class OnlineScoreHandler:
         if request.is_admin:
             score = 42
         else:
-            score = get_score(store, r.phone, r.email, r.birthday, r.gender, r.first_name, r.last_name)
+            score = get_score(
+                store, r.phone, r.email, r.birthday, r.gender, r.first_name, r.last_name
+            )
         context["has"] = r.non_empty_fields
         return {"score": score}, OK
 
 
 class ClientsInterestsHandler:
-
     def process_request(self, request, context, store):
         r = ClientsInterestsRequest(request.arguments)
         if not r.is_valid():
@@ -270,9 +258,13 @@ class ClientsInterestsHandler:
 
 def check_auth(request):
     if request.is_admin:
-        digest = hashlib.sha512(bytes(datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT, "utf-8")).hexdigest()
+        digest = hashlib.sha512(
+            bytes(datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT, "utf-8")
+        ).hexdigest()
     else:
-        digest = hashlib.sha512(bytes(request.account + request.login + SALT, "utf-8")).hexdigest()
+        digest = hashlib.sha512(
+            bytes(request.account + request.login + SALT, "utf-8")
+        ).hexdigest()
     if digest == request.token:
         return True
     return False
@@ -281,7 +273,7 @@ def check_auth(request):
 def method_handler(request, ctx, store):
     handlers = {
         "online_score": OnlineScoreHandler,
-        "clients_interests": ClientsInterestsHandler
+        "clients_interests": ClientsInterestsHandler,
     }
 
     method_request = MethodRequest(request["body"])
@@ -295,22 +287,20 @@ def method_handler(request, ctx, store):
 
 
 class MainHTTPHandler(BaseHTTPRequestHandler):
-    router = {
-        "method": method_handler
-    }
+    router = {"method": method_handler}
     store = None
 
     def get_request_id(self, headers):
-        return headers.get('HTTP_X_REQUEST_ID', uuid.uuid4().hex)
+        return headers.get("HTTP_X_REQUEST_ID", uuid.uuid4().hex)
 
     def do_POST(self):
         response, code = {}, OK
         context = {"request_id": self.get_request_id(self.headers)}
         request = None
         try:
-            data_string = self.rfile.read(int(self.headers['Content-Length']))
+            data_string = self.rfile.read(int(self.headers["Content-Length"]))
             request = json.loads(data_string)
-        except:
+        except Exception:
             code = BAD_REQUEST
 
         if request:
@@ -318,7 +308,9 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
             logging.info("%s: %s %s" % (self.path, data_string, context["request_id"]))
             if path in self.router:
                 try:
-                    response, code = self.router[path]({"body": request, "headers": self.headers}, context, self.store)
+                    response, code = self.router[path](
+                        {"body": request, "headers": self.headers}, context, self.store
+                    )
                 except Exception as e:
                     logging.exception("Unexpected error: %s" % e)
                     code = INTERNAL_ERROR
@@ -343,8 +335,12 @@ if __name__ == "__main__":
     op.add_option("-p", "--port", action="store", type=int, default=8080)
     op.add_option("-l", "--log", action="store", default=None)
     (opts, args) = op.parse_args()
-    logging.basicConfig(filename=opts.log, level=logging.INFO,
-                        format='[%(asctime)s] %(levelname).1s %(message)s', datefmt='%Y.%m.%d %H:%M:%S')
+    logging.basicConfig(
+        filename=opts.log,
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname).1s %(message)s",
+        datefmt="%Y.%m.%d %H:%M:%S",
+    )
     server = HTTPServer(("localhost", opts.port), MainHTTPHandler)
     logging.info("Starting server at %s" % opts.port)
     try:
