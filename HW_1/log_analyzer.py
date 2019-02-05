@@ -26,7 +26,7 @@ CONFIG = {
     "LOG_DIR": "./log",
     "REPORT_TEMPLATE_DIR": "./report_template",
     "REPORT_TEMPLATE": "report.html",
-    "REPORT_NAME_PATTERN": "report-*.html",
+    "REPORT_NAME_PATTERN": "report-{}.html",
     "REPORT_DATE_FORMAT": "%Y.%m.%d",
     "LOG_DATE_FORMAT": "%Y%m%d",
     "ERROR_PERCENT_RESTRICTION": 0.1,
@@ -96,8 +96,6 @@ def validate(conf):
         logging.error('No config.ini file')
     elif not os.path.exists(conf['LOG_DIR']):
         logging.error('No log dir: {}'.format(conf['LOG_DIR']))
-    elif not os.path.exists(conf['REPORT_DIR']):
-        logging.error('No report dir: {}'.format(conf['REPORT_DIR']))
     elif not os.path.exists(os.path.join(conf['REPORT_TEMPLATE_DIR'], conf['REPORT_TEMPLATE'])):
         logging.error('No template file: {}'.format(conf['REPORT_TEMPLATE']))
     else:
@@ -121,23 +119,27 @@ def find_last_log(log_dir, format):
 def read_logs(log_path):
     log_open = gzip.open if log_path.endswith(".gz") else open
     with log_open(log_path, 'rb') as log:
-        for i, line in enumerate(log):
+        for line in log:
             yield line.decode('utf-8')
 
 
 def parse_log(log, error_percent):
+    requests = defaultdict(lambda: {'count': 0, 'request_time': []})
     good_log = 0
     bad_log = 0
     for row in read_logs(log.path):
         try:
             entry = LOG_PATTERN.match(row).groupdict()
-            yield entry['request_url'], float(entry['request_time'])
+            requests[entry['request_url']]['count'] += 1
+            requests[entry['request_url']]['request_time'].append(float(entry['request_time']))
             good_log += 1
         except AttributeError:
             bad_log += 1
 
         if bad_log / good_log > error_percent:
             raise ValueError
+
+    return requests, error_percent
 
 
 def get_request_statistics(requests):
@@ -192,29 +194,29 @@ def report(config):
     # Firstly, we are looking for the most recent file of logs
     last_log = find_last_log(config['LOG_DIR'], config['LOG_DATE_FORMAT'])
     if not last_log:
-        logging.error('No find log in dir {}'.format(config['LOG_DIR']))
+        logging.info('No find log in dir {}'.format(config['LOG_DIR']))
         return
     else:
         logging.info('Find log {}'.format(last_log.path))
 
     # Secondly, to check whether there is already a prepared report file
-    report_path = os.path.join(
-        config['REPORT_DIR'], config['REPORT_NAME_PATTERN'].replace(
-            '*', last_log.date.strftime(config['REPORT_DATE_FORMAT'])
-        )
-    )
+
+    if not os.path.exists(config['REPORT_DIR']):
+        os.mkdir(config['REPORT_DIR'])
+
+    log_date = last_log.date.strftime(config['REPORT_DATE_FORMAT'])
+    report_path = os.path.join(config['REPORT_DIR'], config['REPORT_NAME_PATTERN'].format(log_date))
+
     if os.path.exists(report_path):
         logging.info('For today the report is already prepared')
         return
 
     # Third, parse a logfile
-    requests = defaultdict(lambda: {'count': 0, 'request_time': []})
+
     try:
-        for url, request_time in parse_log(last_log, config['ERROR_PERCENT_RESTRICTION']):
-            requests[url]['count'] += 1
-            requests[url]['request_time'].append(request_time)
+        requests, error_rate = parse_log(last_log, config['ERROR_PERCENT_RESTRICTION'])
     except ValueError:
-        logging.error('A lot of incorrectly recognized logs')
+        logging.error("Error rate {} isn't acceptable {}".format(error_rate, config['ERROR_PERCENT_RESTRICTION']))
         return
 
     # In the end, we count the statistics and create a report
