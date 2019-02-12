@@ -286,7 +286,11 @@ def method_handler(request, ctx, store):
     if not check_auth(method_request):
         return "Forbidden", FORBIDDEN
 
-    handler = handlers[method_request.method]()
+    try:
+        handler = handlers[method_request.method]()
+    except KeyError as e:
+        return "Некорректный метод", INVALID_REQUEST
+
     return handler.process_request(method_request, ctx, store)
 
 

@@ -138,6 +138,13 @@ class TestSuite(unittest.TestCase):
                         for v in response.values()))
         self.assertEqual(self.context.get("nclients"), len(arguments["client_ids"]))
 
+    def test_invalid_method(self):
+        request = {"account": "horns&hoofs", "login": "h&f", "method": "invalid_method", "arguments": {}}
+        self.set_valid_auth(request)
+        response, code = self.get_response(request)
+        self.assertEqual(api.INVALID_REQUEST, code)
+        self.assertTrue(len(response))
+
 
 if __name__ == "__main__":
     unittest.main()
