@@ -29,6 +29,10 @@ FEMALE = 2
 GENDERS = {UNKNOWN: "unknown", MALE: "male", FEMALE: "female"}
 
 
+class ValidationError(Exception):
+    pass
+
+
 class BaseField:
 
     empty_values = (None, "", [], (), {})
@@ -39,19 +43,20 @@ class BaseField:
 
     def validate(self, value):
         if value is None and self.required:
-            raise ValueError("Это поле является обязательным")
+            raise ValidationError("Это поле является обязательным")
         if value in self.empty_values and not self.nullable:
-            raise ValueError("Это поле не может быть пустым")
+            raise ValidationError("Это поле не может быть пустым")
 
     def run_validator(self, value):
         pass
 
-    def to_python(self, value):
+    def validate_type(self, value):
         return value
 
     def clean(self, value):
-        value = self.to_python(value)
         self.validate(value)
+        if value is not None:
+            value = self.validate_type(value)
         if value in self.empty_values:
             return value
         self.run_validator(value)
@@ -60,16 +65,16 @@ class BaseField:
 
 
 class CharField(BaseField):
-    def to_python(self, value):
-        if value is not None and not isinstance(value, str):
-            raise TypeError("Это поле должно быть строкой")
+    def validate_type(self, value):
+        if not isinstance(value, str):
+            raise ValidationError("Это поле должно быть строкой")
         return value
 
 
 class ArgumentsField(BaseField):
-    def to_python(self, value):
-        if value is not None and not isinstance(value, dict):
-            raise TypeError("Это поле должно быть словарем")
+    def validate_type(self, value):
+        if not isinstance(value, dict):
+            raise ValidationError("Это поле должно быть словарем")
         return value
 
 
@@ -77,36 +82,36 @@ class EmailField(CharField):
     def run_validator(self, value):
         super().run_validator(value)
         if "@" not in value:
-            raise ValueError("Неверно указан адрес электронной почты")
+            raise ValidationError("Неверно указан адрес электронной почты")
 
 
 class PhoneField(BaseField):
-    def to_python(self, value):
+    def validate_type(self, value):
         if value is None:
             return value
         if not isinstance(value, (str, int)):
-            raise TypeError("Это поле должно быть задано числом или строкой")
+            raise ValidationError("Это поле должно быть задано числом или строкой")
         return str(value)
 
     def run_validator(self, value):
         try:
             int(value)
         except ValueError:
-            raise ValueError("Это поле должно содержать только цифры")
+            raise ValidationError("Это поле должно содержать только цифры")
 
         if not value.startswith("7") or len(value) != 11:
-            raise ValueError("Неверно указан номер телефона")
+            raise ValidationError("Неверно указан номер телефона")
 
 
 class DateField(CharField):
-    def to_python(self, value):
-        value = super().to_python(value)
+    def validate_type(self, value):
+        value = super().validate_type(value)
         if value in self.empty_values:
             return value
         try:
             return self.strptime(value, "%d.%m.%Y")
         except ValueError:
-            raise ValueError("Дата должна иметь формат DD.MM.YYYY")
+            raise ValidationError("Дата должна иметь формат DD.MM.YYYY")
 
     def strptime(self, value, format):
         return datetime.datetime.strptime(value, format).date()
@@ -118,32 +123,31 @@ class BirthDayField(DateField):
         today = datetime.date.today()
         delta = today - value
         if delta.days / 365.25 > 70:
-            raise ValueError("С даты рождения должно пройти не более 70 лет")
+            raise ValidationError("С даты рождения должно пройти не более 70 лет")
 
 
 class GenderField(BaseField):
-    def to_python(self, value):
-        if value is not None and not isinstance(value, int):
-            raise TypeError("Это поле должно быть целым положительным числом")
+    def validate_type(self, value):
+        if not isinstance(value, int):
+            raise ValidationError("Это поле должно быть целым положительным числом")
         return value
 
     def run_validator(self, value):
         if value not in GENDERS:
-            raise ValueError("Пол должен быть задан значениями 0,1 или 2")
+            raise ValidationError("Пол должен быть задан значениями 0,1 или 2")
 
 
 class ClientIDsField(BaseField):
-    def to_python(self, value):
-        if value is not None:
-            if not isinstance(value, list) or not all(
-                isinstance(v, int) for v in value
-            ):
-                raise TypeError("Это поле должно содержать спискок целых чисел")
+    def validate_type(self, value):
+        if not isinstance(value, list) or not all(
+            isinstance(v, int) for v in value
+        ):
+            raise ValidationError("Это поле должно содержать спискок целых чисел")
         return value
 
     def run_validator(self, value):
         if not all(v >= 0 for v in value):
-            raise ValueError("Это поле должно состоять из положительных целых чисел")
+            raise ValidationError("Это поле должно состоять из положительных целых чисел")
 
 
 class RequestMeta(type):
@@ -188,7 +192,7 @@ class BaseRequest(metaclass=RequestMeta):
 
                 if value not in field.empty_values:
                     self.non_empty_fields.append(name)
-            except (TypeError, ValueError) as e:
+            except ValidationError as e:
                 self._errors[name] = str(e)
 
 
